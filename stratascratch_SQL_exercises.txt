@@ -1,0 +1,255 @@
+Calculate each user's average session time. A session is defined as the time difference between a page_load and page_exit. For simplicity, assume a user has only 1 session per day and if there are multiple of the same events on that day, consider only the latest page_load and earliest page_exit, with an obvious restriction that load time event should happen before exit time event . Output the user_id and their average session time:
+
+WITH all_user_sessions as
+(
+SELECT
+    t1.user_id,
+    t1.timestamp::date as date,	-- Command :: converts "timestamp" to just the date
+    min(t2.timestamp::TIMESTAMP) - max(t1.timestamp::TIMESTAMP) as session_duration	-- Converting "timestamp" to just the timestamp and calculating the time between 'page_load' and 'page_exit'
+FROM
+    facebook_web_log t1
+LEFT JOIN
+    facebook_web_log t2
+        ON t1.user_id  = t2.user_id
+WHERE
+    t1.action = 'page_load' AND t2.action = 'page_exit' AND t2.timestamp > t1.timestamp
+GROUP BY
+    t1.user_id,
+    date
+)
+    
+SELECT
+    user_id,
+    avg(session_duration)
+FROM
+    all_user_sessions
+GROUP BY
+    user_id
+
+__________________________________________________________________________________________________________________________________________________
+
+Given a table of purchases by date, calculate the month-over-month percentage change in revenue. The output should include the year-month date (YYYY-MM) and percentage change, rounded to the 2nd decimal point, and sorted from the beginning of the year to the end of the year.
+The percentage change column will be populated from the 2nd month forward and can be calculated as ((this month's revenue - last month's revenue) / last month's revenue)*100:
+
+SELECT
+    to_char(created_at::date, 'YYYY-MM') AS year_month,
+    round(((sum(value) - lag(sum(value), 1) OVER w) / (lag(sum(value), 1) OVER w)) * 100, 2) AS revenue_diff_pct
+FROM
+    sf_transactions
+GROUP BY
+    year_month 
+WINDOW w AS (order by to_char(created_at::date, 'YYYY-MM'))
+
+
+___________________________________________________________________________________________________________________________________________________
+
+Find the email activity rank for each user. Email activity rank is defined by the total number of emails sent. The user with the highest number of emails sent will have a rank of 1, and so on. Output the user, total emails, and their activity rank. Order records by the total emails in descending order. Sort users with the same number of emails in alphabetical order.
+In your rankings, return a unique value (i.e., a unique rank) even if multiple users have the same number of emails. For tie breaker use alphabetical order of the user usernames:
+
+-- Starting with creating a subquery to formulate the needed information. COUNT() counts all rows in "id" for the GROUP BY column
+WITH
+    total_emails AS
+(
+SELECT
+    g1.from_user,
+    count(g1.id) AS nemails
+FROM
+    google_gmail_emails g1
+GROUP BY
+    g1.from_user
+)
+
+SELECT
+    from_user,
+    nemails,
+    DENSE_RANK() OVER (ORDER BY nemails DESC, from_user ASC) AS Rank 	--DENSE_RANK() treats all values differentially in contrst to RANK()
+FROM
+    total_emails
+ORDER BY
+    nemails DESC,
+    from_user ASC
+
+____________________________________________________________________________________________________________________________________________________
+
+Write a query that'll identify returning active users. A returning active user is a user that has made a second purchase within 7 days of any other of their purchases. Output a list of user_ids of these returning active users:
+
+SELECT
+    DISTINCT (a1.user_id)
+FROM
+    amazon_transactions a1
+JOIN
+    amazon_transactions a2
+        ON  a1.user_id = a2.user_id AND a1.id <> a2.id AND a2.created_at::date - a1.created_at::date BETWEEN 0 and 7
+ORDER BY
+    a1.user_id
+
+This SQL code retrieves distinct user IDs from the table amazon_transactions. It selects user IDs where there exist two transactions (a1 and a2) by the same user (a1.user_id = a2.user_id) with different IDs (a1.id <> a2.id) and where the time difference between the two transactions (a2.created_at and a1.created_at) is between 0 and 7 days.
+
+In other words, it finds users who have made transactions within 7 days of each other. The ORDER BY clause orders the results by user_id.
+
+
+______________________________________________________________________________________________________________________________________________________
+
+
+You are given a table of product launches by company by year. Write a query to count the net difference between the number of products companies launched in 2020 with the number of products companies launched in the previous year. Output the name of the companies and a net difference of net products released for 2020 compared to the previous year.
+
+-- First I construct 2 subquesrys for counted products launched on years 2020 and 2019
+-- FULL OUTER JOIN returns all values from both tables regardless of if there are values in joined cells
+
+WITH
+    atable AS
+(
+    SELECT
+        company_name,
+        product_name AS brand_2020
+    FROM
+        car_launches
+    WHERE
+        year = 2020 -- Returns only the values where year is 2020 to get all companies and their products for 2020
+),
+    btable AS
+(
+    SELECT
+        company_name,
+        product_name AS brand_2019
+    FROM
+        car_launches
+    WHERE
+        year = 2019 -- Returns the products for 2019 similar to previous definition
+)
+
+
+SELECT
+    atable.company_name,
+    (COUNT(DISTINCT atable.brand_2020) - COUNT(DISTINCT btable.brand_2019)) AS net_products
+FROM
+    atable
+FULL OUTER JOIN
+    btable
+    ON atable.company_name = btable.company_name
+GROUP BY
+    atable.company_name
+
+
+__________________________________________________________________________________________________________________________________________________
+
+Compare each employee's salary with the average salary of the corresponding department.
+Output the department, first name, and salary of employees along with the average salary of that department.
+
+select
+    department,
+    first_name,
+    salary,
+    AVG(salary) OVER (PARTITION by department) -- PARTITION functions like group by without group by
+from
+    employee
+
+
+_________________________________________________________________________________________________________________________________________________
+
+Find the number of workers by department who joined in or after April.
+Output the department name along with the corresponding number of workers.
+Sort records based on the number of workers in descending order.
+
+select
+    distinct department,
+    count(worker_id)
+from
+    worker
+where
+    extract (month from joining_date) >= 4 	-- extracting the month as integer
+group by
+    department
+order by
+    count desc
+
+
+__________________________________________________________________________________________
+
+What is the overall friend acceptance rate by date? Your output should have the rate of acceptances by the date the request was sent. Order by the earliest date to latest.
+
+
+Assume that each friend request starts by a user sending (i.e., user_id_sender) a friend request to another user (i.e., user_id_receiver) that's logged in the table with action = 'sent'. If the request is accepted, the table logs action = 'accepted'. If the request is not accepted, no record of action = 'accepted' is logged.
+
+with
+    sent_cte as
+(
+select
+    date,
+    user_id_sender,
+    user_id_receiver
+from
+    fb_friend_requests
+where
+    action = 'sent'
+),
+accepted_cte as
+(
+select
+    date,
+    user_id_sender,
+    user_id_receiver
+from
+    fb_friend_requests
+where
+    action = 'accepted'
+)
+
+select
+    a.date,
+    count(b.user_id_receiver)/cast(count(a.user_id_sender) as decimal) as percentage_acceptance	--cast( as decimal) coverts the count to a decimal
+from
+    sent_cte a
+left join
+    accepted_cte b
+    on
+        a.user_id_sender = b.user_id_sender
+group by
+    a.date
+order by
+    a.date
+
+
+_____________________________________________________________________________________________________________________________________
+
+Calculate the percentage of spam posts in all viewed posts by day. A post is considered a spam if a string "spam" is inside keywords of the post. Note that the facebook_posts table stores all posts posted by users. The facebook_post_views table is an action table denoting if a user has viewed a post.
+
+select
+    spam_summary.post_date,
+    (n_spam/n_posts::float)*100 as spam_share
+from
+    (select
+        post_date,
+        sum(case
+                when v.viewer_id is not null then 1
+                else 0
+            end) as n_posts
+    from
+        facebook_posts p
+    left join
+        facebook_post_views v
+            on
+                p.post_id = v.post_id
+    group by
+        post_date) posts_summary
+left join
+    (select
+        post_date,
+        sum(case
+                when
+                    v.viewer_id is not null then 1
+                    else 0
+            end) as n_spam
+    from
+        facebook_posts p
+    left join
+        facebook_post_views v
+            on
+                p.post_id = v.post_id
+    where
+        post_keywords ilike '%spam%'
+    group by
+        post_date) spam_summary
+             on
+               spam_summary.post_date = posts_summary.post_date
+
